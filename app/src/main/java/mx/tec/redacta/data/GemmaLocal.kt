@@ -2,8 +2,12 @@ package mx.tec.redacta.data
 
 import android.content.Context
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.Message
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
@@ -14,7 +18,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -67,8 +72,25 @@ class GemmaLocal @Inject constructor(
             }
     }
 
-    // B1
-    override fun generar(pedido: Pedido): Flow<String> = emptyFlow()
+    override fun generar(pedido: Pedido): Flow<String> = flow {
+        val motor = checkNotNull(motor) { "El modelo todavía no está cargado" }
+        val config = ConversationConfig(
+            systemInstruction = pedido.instruccion?.let { Contents.of(it) },
+            maxOutputToken = MAX_TOKENS
+        )
+        // Una conversación por pedido: sin historia, cada texto se trata solo.
+        motor.createConversation(config).use { conversacion ->
+            try {
+                conversacion.sendMessageAsync(pedido.mensaje).collect { emit(it.texto()) }
+            } catch (e: CancellationException) {
+                conversacion.cancelProcess()   // que el CPU deje de generar lo que ya nadie va a leer
+                throw e
+            }
+        }
+    }.flowOn(Dispatchers.Default)
+
+    private fun Message.texto(): String =
+        contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
 
     companion object {
         const val ARCHIVO = "gemma3-1b-it-int4.litertlm"
